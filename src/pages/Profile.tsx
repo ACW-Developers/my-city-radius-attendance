@@ -1,5 +1,6 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useAuth } from '@/hooks/useAuth';
+import { useWebAuthn } from '@/hooks/useWebAuthn';
 import { supabase } from '@/integrations/supabase/client';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -9,8 +10,8 @@ import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Separator } from '@/components/ui/separator';
 import { toast } from 'sonner';
-import { User, Mail, Shield, Save, Camera, Calendar, Clock, Briefcase } from 'lucide-react';
-import { formatDateAZ, formatTimeAZ } from '@/lib/timezone';
+import { User, Mail, Shield, Save, Camera, Calendar, Clock, Briefcase, Fingerprint, Trash2, Plus, Smartphone } from 'lucide-react';
+import { formatDateAZ } from '@/lib/timezone';
 
 const Profile = () => {
   const { user, profile, roles, refreshProfile } = useAuth();
