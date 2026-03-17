@@ -1,5 +1,6 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useAuth } from '@/hooks/useAuth';
+import { useWebAuthn } from '@/hooks/useWebAuthn';
 import { supabase } from '@/integrations/supabase/client';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -9,17 +10,26 @@ import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Separator } from '@/components/ui/separator';
 import { toast } from 'sonner';
-import { User, Mail, Shield, Save, Camera, Calendar, Clock, Briefcase } from 'lucide-react';
-import { formatDateAZ, formatTimeAZ } from '@/lib/timezone';
+import { User, Mail, Shield, Save, Camera, Calendar, Clock, Briefcase, Fingerprint, Trash2, Plus, Smartphone } from 'lucide-react';
+import { formatDateAZ } from '@/lib/timezone';
 
 const Profile = () => {
   const { user, profile, roles, refreshProfile } = useAuth();
+  const { isSupported, register, getCredentials, removeCredential, loading: bioLoading } = useWebAuthn();
   const [fullName, setFullName] = useState(profile?.full_name || '');
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [credentials, setCredentials] = useState<any[]>([]);
+  const [loadingCreds, setLoadingCreds] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const initials = (profile?.full_name || 'U').split(' ').map(n => n.charAt(0).toUpperCase()).slice(0, 2).join('');
+
+  useEffect(() => {
+    if (user) {
+      getCredentials(user.id).then(c => { setCredentials(c); setLoadingCreds(false); });
+    }
+  }, [user]);
 
   const handleSave = async () => {
     if (!profile) return;
@@ -49,6 +59,23 @@ const Profile = () => {
     toast.success('Avatar updated');
     setUploading(false);
     refreshProfile();
+  };
+
+  const handleRegisterFingerprint = async () => {
+    if (!user || !profile) return;
+    const success = await register(user.id, profile.full_name, profile.email);
+    if (success) {
+      const updated = await getCredentials(user.id);
+      setCredentials(updated);
+    }
+  };
+
+  const handleRemoveCredential = async (id: string) => {
+    const success = await removeCredential(id);
+    if (success && user) {
+      const updated = await getCredentials(user.id);
+      setCredentials(updated);
+    }
   };
 
   return (
@@ -98,35 +125,109 @@ const Profile = () => {
           </CardContent>
         </Card>
 
-        {/* Edit Form */}
-        <Card className="border-border/50 md:col-span-2">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base"><User className="size-5 text-primary" /> Personal Information</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <Label className="flex items-center gap-2"><Mail className="size-4 text-muted-foreground" /> Email Address</Label>
-              <Input value={profile?.email || ''} disabled className="bg-muted/50" />
-              <p className="text-xs text-muted-foreground">Email cannot be changed</p>
-            </div>
-            <div className="space-y-2">
-              <Label className="flex items-center gap-2"><User className="size-4 text-muted-foreground" /> Full Name</Label>
-              <Input value={fullName} onChange={e => setFullName(e.target.value)} placeholder="Enter your full name" />
-            </div>
-            <div className="space-y-2">
-              <Label className="flex items-center gap-2"><Shield className="size-4 text-muted-foreground" /> Roles</Label>
-              <Input value={roles.length > 0 ? roles.map(r => r.replace('_', ' ')).join(', ') : 'Unassigned'} disabled className="bg-muted/50 capitalize" />
-            </div>
-            <div className="space-y-2">
-              <Label className="flex items-center gap-2"><Clock className="size-4 text-muted-foreground" /> Account ID</Label>
-              <Input value={user?.id || ''} disabled className="bg-muted/50 font-mono text-xs" />
-            </div>
-            <Separator />
-            <Button onClick={handleSave} disabled={saving} className="gap-2">
-              <Save className="size-4" /> {saving ? 'Saving...' : 'Save Changes'}
-            </Button>
-          </CardContent>
-        </Card>
+        {/* Edit Form + Fingerprint */}
+        <div className="md:col-span-2 space-y-6">
+          <Card className="border-border/50">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-base"><User className="size-5 text-primary" /> Personal Information</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <Label className="flex items-center gap-2"><Mail className="size-4 text-muted-foreground" /> Email Address</Label>
+                <Input value={profile?.email || ''} disabled className="bg-muted/50" />
+                <p className="text-xs text-muted-foreground">Email cannot be changed</p>
+              </div>
+              <div className="space-y-2">
+                <Label className="flex items-center gap-2"><User className="size-4 text-muted-foreground" /> Full Name</Label>
+                <Input value={fullName} onChange={e => setFullName(e.target.value)} placeholder="Enter your full name" />
+              </div>
+              <div className="space-y-2">
+                <Label className="flex items-center gap-2"><Shield className="size-4 text-muted-foreground" /> Roles</Label>
+                <Input value={roles.length > 0 ? roles.map(r => r.replace('_', ' ')).join(', ') : 'Unassigned'} disabled className="bg-muted/50 capitalize" />
+              </div>
+              <div className="space-y-2">
+                <Label className="flex items-center gap-2"><Clock className="size-4 text-muted-foreground" /> Account ID</Label>
+                <Input value={user?.id || ''} disabled className="bg-muted/50 font-mono text-xs" />
+              </div>
+              <Separator />
+              <Button onClick={handleSave} disabled={saving} className="gap-2">
+                <Save className="size-4" /> {saving ? 'Saving...' : 'Save Changes'}
+              </Button>
+            </CardContent>
+          </Card>
+
+          {/* Fingerprint Management */}
+          <Card className="border-border/50">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Fingerprint className="size-5 text-primary" /> Biometric Authentication
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {!isSupported() ? (
+                <div className="rounded-md bg-muted/50 p-4 text-center">
+                  <p className="text-sm text-muted-foreground">Biometric authentication is not supported on this device/browser.</p>
+                </div>
+              ) : (
+                <>
+                  <p className="text-xs text-muted-foreground">
+                    Register your fingerprint for quick check-in/check-out on touchscreen devices and kiosks.
+                  </p>
+
+                  {/* Registered credentials */}
+                  {loadingCreds ? (
+                    <div className="text-xs text-muted-foreground animate-pulse">Loading credentials...</div>
+                  ) : credentials.length > 0 ? (
+                    <div className="space-y-2">
+                      {credentials.map((cred: any) => (
+                        <div key={cred.id} className="flex items-center justify-between rounded-md border border-border bg-muted/30 px-3 py-2.5">
+                          <div className="flex items-center gap-3">
+                            <div className="flex size-8 items-center justify-center rounded-full bg-primary/10">
+                              <Smartphone className="size-4 text-primary" />
+                            </div>
+                            <div>
+                              <p className="text-sm font-medium text-foreground">{cred.device_name || 'Unknown Device'}</p>
+                              <p className="text-xs text-muted-foreground">
+                                Registered {cred.created_at ? formatDateAZ(cred.created_at) : 'N/A'}
+                              </p>
+                            </div>
+                          </div>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="size-8 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                            onClick={() => handleRemoveCredential(cred.id)}
+                          >
+                            <Trash2 className="size-3.5" />
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="rounded-md border border-dashed border-border bg-muted/20 p-4 text-center">
+                      <Fingerprint className="mx-auto size-8 text-muted-foreground/50 mb-2" />
+                      <p className="text-sm text-muted-foreground">No fingerprints registered yet</p>
+                    </div>
+                  )}
+
+                  <Button
+                    onClick={handleRegisterFingerprint}
+                    disabled={bioLoading}
+                    variant="outline"
+                    className="w-full gap-2"
+                  >
+                    {bioLoading ? (
+                      <div className="size-4 rounded-full border-2 border-primary border-t-transparent animate-spin" />
+                    ) : (
+                      <Plus className="size-4" />
+                    )}
+                    {bioLoading ? 'Scanning...' : 'Register New Fingerprint'}
+                  </Button>
+                </>
+              )}
+            </CardContent>
+          </Card>
+        </div>
       </div>
     </div>
   );
