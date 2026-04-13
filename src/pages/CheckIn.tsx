@@ -1,6 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
 import { useAuth } from '@/hooks/useAuth';
-import { useWebAuthn } from '@/hooks/useWebAuthn';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -8,25 +7,23 @@ import { Progress } from '@/components/ui/progress';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { toast } from 'sonner';
 import {
   Play, Pause, Square, Clock, User, CalendarDays, Coffee, Timer,
-  CheckCircle2, Sun, Moon as MoonIcon, Fingerprint, QrCode, ScanLine,
-  ArrowRight, Zap, Activity,
+  CheckCircle2, Sun, Moon as MoonIcon, QrCode, ScanLine,
+  ArrowRight, Zap, Activity, Camera,
 } from 'lucide-react';
 import { getTodayDateStringAZ, getCurrentHourAZ, formatTimeAZ, formatDateAZ } from '@/lib/timezone';
-import { QRCodeSVG } from 'qrcode.react';
+import { QRScanner } from '@/components/QRScanner';
 
 const BIWEEKLY_TARGET_HOURS = 80;
 const PAUSE_REASONS = ['Lunch Break', 'Appointment', 'Personal Break', 'Meeting', 'Other'];
 
 const CheckIn = () => {
   const { user, profile } = useAuth();
-  const { isSupported, authenticate, loading: bioLoading } = useWebAuthn();
   const [record, setRecord] = useState<any>(null);
   const [elapsed, setElapsed] = useState(0);
   const [periodHours, setPeriodHours] = useState(0);
@@ -38,15 +35,17 @@ const CheckIn = () => {
   const [pauseReason, setPauseReason] = useState('');
   const [customReason, setCustomReason] = useState('');
 
-  // Badge check-in
+  // QR Scanner state
+  const [scannerActive, setScannerActive] = useState(false);
+
+  // QR checkout confirmation dialog
+  const [checkoutDialog, setCheckoutDialog] = useState(false);
+  const [qrScannedUser, setQrScannedUser] = useState<any>(null);
+  const [dismissedCheckout, setDismissedCheckout] = useState(false);
+
+  // Badge code manual entry
   const [badgeCode, setBadgeCode] = useState('');
   const [badgeLoading, setBadgeLoading] = useState(false);
-
-  // Kiosk mode
-  const [kioskMode, setKioskMode] = useState(false);
-  const [kioskDialog, setKioskDialog] = useState(false);
-  const [kioskUser, setKioskUser] = useState<any>(null);
-  const [kioskAction, setKioskAction] = useState<'checkin' | 'checkout'>('checkin');
 
   const today = getTodayDateStringAZ();
   const hour = getCurrentHourAZ();
@@ -168,14 +167,6 @@ const CheckIn = () => {
 
   const handleCheckIn = () => performCheckIn('manual');
 
-  const handleBiometricCheckIn = async () => {
-    if (!user) return;
-    const success = await authenticate(user.id);
-    if (success) {
-      await performCheckIn('fingerprint');
-    }
-  };
-
   const handleBadgeCheckIn = async () => {
     if (!badgeCode.trim()) { toast.error('Please enter a badge code'); return; }
     setBadgeLoading(true);
@@ -194,6 +185,91 @@ const CheckIn = () => {
     } finally {
       setBadgeLoading(false);
     }
+  };
+
+  const handleQRScan = async (data: string) => {
+    // Expected QR format: MCR:<user_id>:<badge_code>
+    if (!data.startsWith('MCR:')) {
+      toast.error('Invalid QR code format');
+      return;
+    }
+
+    const parts = data.split(':');
+    if (parts.length !== 3) {
+      toast.error('Invalid QR code');
+      return;
+    }
+
+    const [, scannedUserId, scannedBadge] = parts;
+
+    // Verify the badge belongs to the user
+    if (scannedUserId !== user?.id) {
+      toast.error('This QR code does not belong to you');
+      return;
+    }
+
+    // Verify badge code matches
+    const { data: matchedProfile } = await supabase
+      .from('profiles')
+      .select('user_id, full_name, badge_code')
+      .eq('user_id', scannedUserId)
+      .eq('badge_code', scannedBadge)
+      .maybeSingle();
+
+    if (!matchedProfile) {
+      toast.error('QR code verification failed');
+      return;
+    }
+
+    setScannerActive(false);
+
+    // Check current attendance status
+    const { data: existingRecord } = await supabase
+      .from('attendance_records')
+      .select('*')
+      .eq('user_id', scannedUserId)
+      .eq('date', today)
+      .maybeSingle();
+
+    if (!existingRecord) {
+      // No record today — check in
+      await performCheckIn('qr_code');
+    } else if (existingRecord.status === 'checked_in' || existingRecord.status === 'paused') {
+      // Already checked in — prompt checkout only if not previously dismissed
+      if (!dismissedCheckout) {
+        setQrScannedUser(matchedProfile);
+        setCheckoutDialog(true);
+      }
+    } else {
+      toast.info('You have already completed your shift today');
+    }
+  };
+
+  const handleCheckOut = async () => {
+    if (!record) return;
+    const pauses = Array.isArray(record.pauses) ? [...record.pauses] : [];
+    if (pauses.length > 0 && !pauses[pauses.length - 1].end) {
+      pauses[pauses.length - 1].end = new Date().toISOString();
+    }
+    const workedMinutes = calculateWorked({ ...record, pauses, check_out: new Date().toISOString(), status: 'checked_out' }) / 60;
+    const { error } = await supabase.from('attendance_records')
+      .update({ check_out: new Date().toISOString(), status: 'checked_out', pauses, total_worked_minutes: workedMinutes })
+      .eq('id', record.id);
+    if (error) { toast.error('Error checking out'); return; }
+    toast.success('Great work today! See you tomorrow! 🌟');
+    await logActivity('check_out', `Checked out. Worked ${workedMinutes.toFixed(1)} minutes`);
+    fetchToday();
+  };
+
+  const handleQRCheckOut = async () => {
+    setCheckoutDialog(false);
+    setDismissedCheckout(false);
+    await handleCheckOut();
+  };
+
+  const handleDismissCheckoutDialog = () => {
+    setCheckoutDialog(false);
+    setDismissedCheckout(true);
   };
 
   const handlePauseClick = () => {
@@ -235,22 +311,6 @@ const CheckIn = () => {
     fetchToday();
   };
 
-  const handleCheckOut = async () => {
-    if (!record) return;
-    const pauses = Array.isArray(record.pauses) ? [...record.pauses] : [];
-    if (pauses.length > 0 && !pauses[pauses.length - 1].end) {
-      pauses[pauses.length - 1].end = new Date().toISOString();
-    }
-    const workedMinutes = calculateWorked({ ...record, pauses, check_out: new Date().toISOString(), status: 'checked_out' }) / 60;
-    const { error } = await supabase.from('attendance_records')
-      .update({ check_out: new Date().toISOString(), status: 'checked_out', pauses, total_worked_minutes: workedMinutes })
-      .eq('id', record.id);
-    if (error) { toast.error('Error checking out'); return; }
-    toast.success('Great work today! See you tomorrow! 🌟');
-    await logActivity('check_out', `Checked out. Worked ${workedMinutes.toFixed(1)} minutes`);
-    fetchToday();
-  };
-
   if (loading) return (
     <div className="flex items-center justify-center py-20">
       <div className="animate-pulse text-primary text-sm">Loading...</div>
@@ -262,7 +322,6 @@ const CheckIn = () => {
   const dailyTarget = 8;
   const dailyProgress = Math.min((todayHours / dailyTarget) * 100, 100);
   const biweeklyProgress = Math.min((periodHours / BIWEEKLY_TARGET_HOURS) * 100, 100);
-  const userBadgeCode = (profile as any)?.badge_code || '';
 
   const CircularProgress = ({ progress, size = 100, strokeWidth = 6, children }: { progress: number; size?: number; strokeWidth?: number; children?: React.ReactNode }) => {
     const radius = (size - strokeWidth) / 2;
@@ -325,32 +384,33 @@ const CheckIn = () => {
         </DialogContent>
       </Dialog>
 
-      {/* Kiosk Confirmation Dialog */}
-      <Dialog open={kioskDialog} onOpenChange={setKioskDialog}>
+      {/* QR Checkout Confirmation Dialog */}
+      <Dialog open={checkoutDialog} onOpenChange={(open) => { if (!open) handleDismissCheckoutDialog(); }}>
         <DialogContent className="max-w-xs">
           <DialogHeader>
             <DialogTitle className="text-sm flex items-center gap-2">
-              <Fingerprint className="size-4 text-primary" />
-              {kioskAction === 'checkin' ? 'Check In' : 'Check Out'}
+              <QrCode className="size-4 text-primary" />
+              Confirm Check Out
             </DialogTitle>
             <DialogDescription className="text-xs">
-              Fingerprint verified for {kioskUser?.full_name}
+              QR code verified for {qrScannedUser?.full_name}
             </DialogDescription>
           </DialogHeader>
           <div className="flex flex-col items-center gap-3 py-3">
-            <div className="flex size-14 items-center justify-center rounded-full bg-primary/10">
-              <CheckCircle2 className="size-7 text-primary" />
+            <div className="flex size-14 items-center justify-center rounded-full bg-destructive/10">
+              <Square className="size-7 text-destructive" />
             </div>
             <p className="text-xs text-center text-foreground">
-              {kioskAction === 'checkin'
-                ? `Ready to check in ${kioskUser?.full_name}?`
-                : `Ready to check out ${kioskUser?.full_name}?`}
+              You are currently checked in. Do you want to end your shift now?
+            </p>
+            <p className="text-2xs text-muted-foreground text-center">
+              Time worked: <span className="font-mono font-bold">{formatTime(elapsed)}</span>
             </p>
           </div>
           <DialogFooter className="gap-2">
-            <Button variant="outline" size="sm" className="text-xs" onClick={() => setKioskDialog(false)}>Cancel</Button>
-            <Button size="sm" className="text-xs gap-1.5" onClick={() => { setKioskDialog(false); kioskAction === 'checkin' ? performCheckIn('kiosk-fingerprint') : handleCheckOut(); }}>
-              <ArrowRight className="size-3" /> Confirm
+            <Button variant="outline" size="sm" className="text-xs" onClick={handleDismissCheckoutDialog}>Cancel</Button>
+            <Button variant="destructive" size="sm" className="text-xs gap-1.5" onClick={handleQRCheckOut}>
+              <ArrowRight className="size-3" /> Confirm Check Out
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -379,36 +439,33 @@ const CheckIn = () => {
             </CardTitle>
           </CardHeader>
           <CardContent className="px-4 pb-4">
-            <Tabs defaultValue="fingerprint" className="w-full">
+            <Tabs defaultValue="qr" className="w-full">
               <TabsList className="grid w-full grid-cols-3 h-8">
-                <TabsTrigger value="fingerprint" className="gap-1.5 text-2xs"><Fingerprint className="size-3" /> Fingerprint</TabsTrigger>
+                <TabsTrigger value="qr" className="gap-1.5 text-2xs"><Camera className="size-3" /> QR Scan</TabsTrigger>
                 <TabsTrigger value="manual" className="gap-1.5 text-2xs"><Play className="size-3" /> Manual</TabsTrigger>
                 <TabsTrigger value="badge" className="gap-1.5 text-2xs"><QrCode className="size-3" /> Badge</TabsTrigger>
               </TabsList>
 
-              <TabsContent value="fingerprint" className="mt-3">
-                <div className="flex flex-col items-center gap-3 py-4">
-                  <div className="relative">
-                    <button
-                      onClick={handleBiometricCheckIn}
-                      disabled={bioLoading || !isSupported()}
-                      className="group relative flex size-20 items-center justify-center rounded-full border-2 border-primary/30 bg-primary/5 transition-all hover:border-primary hover:bg-primary/10 hover:shadow-lg hover:shadow-primary/20 active:scale-95 disabled:opacity-50"
-                    >
-                      <Fingerprint className="size-9 text-primary transition-transform group-hover:scale-110" />
-                      {bioLoading && (
-                        <div className="absolute inset-0 rounded-full border-2 border-primary border-t-transparent animate-spin" />
-                      )}
-                    </button>
-                    {!bioLoading && isSupported() && (
-                      <div className="absolute inset-0 rounded-full border-2 border-primary/20 animate-pulse-ring pointer-events-none" />
-                    )}
-                  </div>
-                  <div className="text-center">
-                    <p className="text-xs font-medium text-foreground">Touch to Check In</p>
-                    <p className="text-2xs text-muted-foreground mt-0.5">
-                      {!isSupported() ? 'Biometrics not available on this device' : 'Use fingerprint or face ID'}
-                    </p>
-                  </div>
+              <TabsContent value="qr" className="mt-3">
+                <div className="flex flex-col items-center gap-3 py-2">
+                  {!scannerActive ? (
+                    <>
+                      <div className="flex size-16 items-center justify-center rounded-full bg-primary/10">
+                        <Camera className="size-8 text-primary" />
+                      </div>
+                      <p className="text-2xs text-muted-foreground text-center">Open camera to scan your QR code and check in</p>
+                      <Button onClick={() => { setDismissedCheckout(false); setScannerActive(true); }} size="sm" className="gap-1.5 rounded-full px-6 text-xs">
+                        <Camera className="size-3.5" /> Open Camera
+                      </Button>
+                    </>
+                  ) : (
+                    <>
+                      <QRScanner onScan={handleQRScan} scanning={scannerActive} />
+                      <Button onClick={() => setScannerActive(false)} variant="outline" size="sm" className="gap-1.5 text-xs">
+                        <Square className="size-3" /> Close Camera
+                      </Button>
+                    </>
+                  )}
                 </div>
               </TabsContent>
 
@@ -426,14 +483,6 @@ const CheckIn = () => {
 
               <TabsContent value="badge" className="mt-3">
                 <div className="flex flex-col items-center gap-3 py-3">
-                  {userBadgeCode && (
-                    <div className="flex flex-col items-center gap-2">
-                      <div className="rounded-lg border border-border/50 bg-card p-3">
-                        <QRCodeSVG value={userBadgeCode} size={100} bgColor="transparent" fgColor="hsl(var(--foreground))" level="M" />
-                      </div>
-                      <p className="font-mono text-xs font-bold tracking-widest text-foreground">{userBadgeCode}</p>
-                    </div>
-                  )}
                   <div className="flex w-full max-w-xs gap-2">
                     <div className="relative flex-1">
                       <ScanLine className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
@@ -450,10 +499,35 @@ const CheckIn = () => {
                       {badgeLoading ? '...' : 'Go'}
                     </Button>
                   </div>
-                  <p className="text-2xs text-muted-foreground">Scan badge QR or type code manually</p>
+                  <p className="text-2xs text-muted-foreground">Type your badge code manually</p>
                 </div>
               </TabsContent>
             </Tabs>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* QR Scanner for checkout when already checked in */}
+      {record && (record.status === 'checked_in' || record.status === 'paused') && (
+        <Card className="border-border/50">
+          <CardHeader className="pb-2 px-4 pt-3">
+            <CardTitle className="text-xs font-medium flex items-center gap-1.5">
+              <Camera className="size-3.5 text-primary" /> QR Check Out
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="px-4 pb-3">
+            {!scannerActive ? (
+              <Button onClick={() => { setDismissedCheckout(false); setScannerActive(true); }} variant="outline" size="sm" className="gap-1.5 text-xs w-full">
+                <Camera className="size-3.5" /> Scan QR to Check Out
+              </Button>
+            ) : (
+              <div className="flex flex-col items-center gap-2">
+                <QRScanner onScan={handleQRScan} scanning={scannerActive} />
+                <Button onClick={() => setScannerActive(false)} variant="outline" size="sm" className="gap-1.5 text-xs">
+                  <Square className="size-3" /> Close Camera
+                </Button>
+              </div>
+            )}
           </CardContent>
         </Card>
       )}

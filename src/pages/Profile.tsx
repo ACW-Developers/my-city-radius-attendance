@@ -1,6 +1,5 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef } from 'react';
 import { useAuth } from '@/hooks/useAuth';
-import { useWebAuthn } from '@/hooks/useWebAuthn';
 import { supabase } from '@/integrations/supabase/client';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -10,26 +9,20 @@ import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Separator } from '@/components/ui/separator';
 import { toast } from 'sonner';
-import { User, Mail, Shield, Save, Camera, Calendar, Clock, Briefcase, Fingerprint, Trash2, Plus, Smartphone } from 'lucide-react';
+import { User, Mail, Shield, Save, Camera, Calendar, Clock, Briefcase, QrCode, Download } from 'lucide-react';
 import { formatDateAZ } from '@/lib/timezone';
+import { QRCodeSVG } from 'qrcode.react';
 
 const Profile = () => {
   const { user, profile, roles, refreshProfile } = useAuth();
-  const { isSupported, register, getCredentials, removeCredential, loading: bioLoading } = useWebAuthn();
   const [fullName, setFullName] = useState(profile?.full_name || '');
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [credentials, setCredentials] = useState<any[]>([]);
-  const [loadingCreds, setLoadingCreds] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const qrRef = useRef<HTMLDivElement>(null);
 
   const initials = (profile?.full_name || 'U').split(' ').map(n => n.charAt(0).toUpperCase()).slice(0, 2).join('');
-
-  useEffect(() => {
-    if (user) {
-      getCredentials(user.id).then(c => { setCredentials(c); setLoadingCreds(false); });
-    }
-  }, [user]);
+  const badgeCode = (profile as any)?.badge_code || '';
 
   const handleSave = async () => {
     if (!profile) return;
@@ -61,21 +54,36 @@ const Profile = () => {
     refreshProfile();
   };
 
-  const handleRegisterFingerprint = async () => {
-    if (!user || !profile) return;
-    const success = await register(user.id, profile.full_name, profile.email);
-    if (success) {
-      const updated = await getCredentials(user.id);
-      setCredentials(updated);
-    }
-  };
+  const handleDownloadQR = () => {
+    if (!qrRef.current) return;
+    const svg = qrRef.current.querySelector('svg');
+    if (!svg) return;
 
-  const handleRemoveCredential = async (id: string) => {
-    const success = await removeCredential(id);
-    if (success && user) {
-      const updated = await getCredentials(user.id);
-      setCredentials(updated);
-    }
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const size = 400;
+    canvas.width = size;
+    canvas.height = size + 60;
+
+    const svgData = new XMLSerializer().serializeToString(svg);
+    const img = new Image();
+    img.onload = () => {
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 20, 20, size - 40, size - 40);
+      ctx.fillStyle = '#000000';
+      ctx.font = 'bold 18px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(badgeCode, size / 2, size + 30);
+
+      const link = document.createElement('a');
+      link.download = `qr-code-${badgeCode}.png`;
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+    };
+    img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svgData)));
   };
 
   return (
@@ -125,7 +133,7 @@ const Profile = () => {
           </CardContent>
         </Card>
 
-        {/* Edit Form + Fingerprint */}
+        {/* Edit Form + QR Code */}
         <div className="md:col-span-2 space-y-6">
           <Card className="border-border/50">
             <CardHeader>
@@ -156,74 +164,32 @@ const Profile = () => {
             </CardContent>
           </Card>
 
-          {/* Fingerprint Management */}
+          {/* QR Code Card */}
           <Card className="border-border/50">
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-base">
-                <Fingerprint className="size-5 text-primary" /> Biometric Authentication
+                <QrCode className="size-5 text-primary" /> My QR Code
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              {!isSupported() ? (
-                <div className="rounded-md bg-muted/50 p-4 text-center">
-                  <p className="text-sm text-muted-foreground">Biometric authentication is not supported on this device/browser.</p>
+              <p className="text-xs text-muted-foreground">
+                Show this QR code to the camera to quickly check in or check out. You can also download it for easy access.
+              </p>
+              {badgeCode ? (
+                <div className="flex flex-col items-center gap-4">
+                  <div ref={qrRef} className="rounded-xl border-2 border-border bg-white p-6">
+                    <QRCodeSVG value={`MCR:${user?.id}:${badgeCode}`} size={180} bgColor="#ffffff" fgColor="#000000" level="H" />
+                  </div>
+                  <p className="font-mono text-sm font-bold tracking-[0.3em] text-foreground">{badgeCode}</p>
+                  <Button onClick={handleDownloadQR} variant="outline" className="gap-2">
+                    <Download className="size-4" /> Download QR Code
+                  </Button>
                 </div>
               ) : (
-                <>
-                  <p className="text-xs text-muted-foreground">
-                    Register your fingerprint for quick check-in/check-out on touchscreen devices and kiosks.
-                  </p>
-
-                  {/* Registered credentials */}
-                  {loadingCreds ? (
-                    <div className="text-xs text-muted-foreground animate-pulse">Loading credentials...</div>
-                  ) : credentials.length > 0 ? (
-                    <div className="space-y-2">
-                      {credentials.map((cred: any) => (
-                        <div key={cred.id} className="flex items-center justify-between rounded-md border border-border bg-muted/30 px-3 py-2.5">
-                          <div className="flex items-center gap-3">
-                            <div className="flex size-8 items-center justify-center rounded-full bg-primary/10">
-                              <Smartphone className="size-4 text-primary" />
-                            </div>
-                            <div>
-                              <p className="text-sm font-medium text-foreground">{cred.device_name || 'Unknown Device'}</p>
-                              <p className="text-xs text-muted-foreground">
-                                Registered {cred.created_at ? formatDateAZ(cred.created_at) : 'N/A'}
-                              </p>
-                            </div>
-                          </div>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="size-8 text-destructive hover:bg-destructive/10 hover:text-destructive"
-                            onClick={() => handleRemoveCredential(cred.id)}
-                          >
-                            <Trash2 className="size-3.5" />
-                          </Button>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="rounded-md border border-dashed border-border bg-muted/20 p-4 text-center">
-                      <Fingerprint className="mx-auto size-8 text-muted-foreground/50 mb-2" />
-                      <p className="text-sm text-muted-foreground">No fingerprints registered yet</p>
-                    </div>
-                  )}
-
-                  <Button
-                    onClick={handleRegisterFingerprint}
-                    disabled={bioLoading}
-                    variant="outline"
-                    className="w-full gap-2"
-                  >
-                    {bioLoading ? (
-                      <div className="size-4 rounded-full border-2 border-primary border-t-transparent animate-spin" />
-                    ) : (
-                      <Plus className="size-4" />
-                    )}
-                    {bioLoading ? 'Scanning...' : 'Register New Fingerprint'}
-                  </Button>
-                </>
+                <div className="rounded-md border border-dashed border-border bg-muted/20 p-6 text-center">
+                  <QrCode className="mx-auto size-10 text-muted-foreground/50 mb-2" />
+                  <p className="text-sm text-muted-foreground">QR code will be generated automatically.</p>
+                </div>
               )}
             </CardContent>
           </Card>
