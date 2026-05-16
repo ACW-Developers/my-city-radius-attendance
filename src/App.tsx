@@ -4,7 +4,9 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider } from "@/hooks/useAuth";
+import { SystemSettingsProvider } from "@/hooks/useSystemSettings";
 import Auth from "./pages/Auth";
+import Scanner from "./pages/Scanner";
 import DashboardLayout from "./pages/DashboardLayout";
 import Dashboard from "./pages/Dashboard";
 import CheckIn from "./pages/CheckIn";
@@ -31,9 +33,11 @@ const App = () => (
       <Sonner />
       <BrowserRouter>
         <AuthProvider>
+          <SystemSettingsProvider>
           <Routes>
             <Route path="/" element={<Navigate to="/auth" replace />} />
             <Route path="/auth" element={<Auth />} />
+            <Route path="/scanner" element={<Scanner />} />
             <Route path="/dashboard" element={<DashboardLayout />}>
               <Route index element={<Dashboard />} />
               <Route path="checkin" element={<CheckIn />} />
@@ -51,6 +55,7 @@ const App = () => (
             </Route>
             <Route path="*" element={<NotFound />} />
           </Routes>
+          </SystemSettingsProvider>
         </AuthProvider>
       </BrowserRouter>
     </TooltipProvider>

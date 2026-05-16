@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { useTheme } from '@/hooks/useTheme';
 import { supabase } from '@/integrations/supabase/client';
@@ -12,8 +12,9 @@ import { Separator } from '@/components/ui/separator';
 import { toast } from 'sonner';
 import {
   Settings as SettingsIcon, Shield, Database, Globe, Palette, Eye, EyeOff,
-  Save, Download, RefreshCw, Monitor, Moon, Sun, Server, ToggleLeft,
+  Save, Download, Upload, RefreshCw, Monitor, Moon, Sun, Server, ToggleLeft, CalendarRange,
 } from 'lucide-react';
+import { getBiweeklyPeriod, formatPeriodLabel } from '@/lib/biweekly';
 
 interface ModuleVisibility {
   dashboard: boolean; checkin: boolean; attendance: boolean; pay: boolean;
@@ -39,6 +40,7 @@ const Settings = () => {
   const [workStart, setWorkStart] = useState('08:00');
   const [workEnd, setWorkEnd] = useState('17:00');
   const [payPeriod, setPayPeriod] = useState('biweekly');
+  const [biweeklyAnchor, setBiweeklyAnchor] = useState(() => new Date().toISOString().split('T')[0]);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -53,6 +55,7 @@ const Settings = () => {
             setWorkEnd(row.value.end || '17:00');
           }
           if (row.key === 'pay_period') setPayPeriod(typeof row.value === 'string' ? row.value : String(row.value));
+          if (row.key === 'biweekly_anchor') setBiweeklyAnchor(typeof row.value === 'string' ? row.value : String(row.value));
         }
       }
     };
@@ -67,9 +70,15 @@ const Settings = () => {
         { key: 'modules', value: modules },
         { key: 'work_hours', value: { start: workStart, end: workEnd, timezone: 'America/Phoenix' } },
         { key: 'pay_period', value: payPeriod },
+        { key: 'biweekly_anchor', value: biweeklyAnchor },
       ];
       for (const u of updates) {
-        await (supabase.from('system_settings' as any) as any).update({ value: u.value, updated_at: new Date().toISOString() }).eq('key', u.key);
+        const { data: existing } = await supabase.from('system_settings' as any).select('id').eq('key', u.key).maybeSingle();
+        if (existing) {
+          await (supabase.from('system_settings' as any) as any).update({ value: u.value, updated_at: new Date().toISOString() }).eq('key', u.key);
+        } else {
+          await (supabase.from('system_settings' as any) as any).insert({ key: u.key, value: u.value });
+        }
       }
       toast.success('Settings saved successfully');
     } catch {
@@ -94,6 +103,55 @@ const Settings = () => {
     a.click();
     URL.revokeObjectURL(url);
     toast.success('Data exported successfully');
+  };
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [importing, setImporting] = useState(false);
+
+  const handleImportClick = () => fileInputRef.current?.click();
+
+  const handleImportData = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = '';
+
+    if (!confirm(`Import backup from "${file.name}"?\n\nExisting records with matching IDs will be overwritten. This cannot be undone.`)) return;
+
+    setImporting(true);
+    const t = toast.loading('Importing backup...');
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text);
+      if (!data || typeof data !== 'object') throw new Error('Invalid backup file');
+
+      const order: Array<{ table: any; conflict: string }> = [
+        { table: 'profiles', conflict: 'user_id' },
+        { table: 'pay_rates', conflict: 'id' },
+        { table: 'user_roles', conflict: 'user_id,role' },
+        { table: 'attendance_records', conflict: 'id' },
+        { table: 'activity_logs', conflict: 'id' },
+        { table: 'system_settings', conflict: 'key' },
+      ];
+
+      const summary: string[] = [];
+      for (const { table, conflict } of order) {
+        const rows = data[table];
+        if (!Array.isArray(rows) || rows.length === 0) continue;
+        const chunkSize = 500;
+        let inserted = 0;
+        for (let i = 0; i < rows.length; i += chunkSize) {
+          const chunk = rows.slice(i, i + chunkSize);
+          const { error } = await (supabase.from(table) as any).upsert(chunk, { onConflict: conflict, ignoreDuplicates: false });
+          if (error) throw new Error(`${table}: ${error.message}`);
+          inserted += chunk.length;
+        }
+        summary.push(`${table}: ${inserted}`);
+      }
+      toast.success('Backup imported successfully', { id: t, description: summary.join(' • ') });
+    } catch (err: any) {
+      toast.error('Import failed', { id: t, description: err?.message || 'Unknown error' });
+    }
+    setImporting(false);
   };
 
   const toggleModule = (key: string) => {
@@ -140,7 +198,37 @@ const Settings = () => {
           </CardContent>
         </Card>
 
-        {/* Appearance */}
+        {/* Biweekly Period */}
+        <Card className="border-border/50 lg:col-span-2 bg-gradient-to-br from-card to-accent/30">
+          <CardHeader className="flex flex-row items-center gap-3 pb-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/15 text-primary">
+              <CalendarRange className="size-5" />
+            </div>
+            <div>
+              <CardTitle className="text-base">Biweekly Period</CardTitle>
+              <p className="text-xs text-muted-foreground mt-1">
+                Set the start date of your first biweekly period. The system advances every 14 days automatically.
+              </p>
+            </div>
+          </CardHeader>
+          <CardContent className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label>First Period Start Date</Label>
+              <Input type="date" value={biweeklyAnchor} onChange={e => setBiweeklyAnchor(e.target.value)} />
+              <p className="text-2xs text-muted-foreground">All payroll, pay summaries, and reports filter from this anchor.</p>
+            </div>
+            <div className="space-y-2">
+              <Label>Current Period</Label>
+              <div className="flex h-10 items-center rounded-md border border-border/60 bg-background px-3">
+                <Badge variant="secondary" className="font-mono text-xs">
+                  {formatPeriodLabel(getBiweeklyPeriod(biweeklyAnchor))}
+                </Badge>
+              </div>
+              <p className="text-2xs text-muted-foreground">Period #{getBiweeklyPeriod(biweeklyAnchor).index + 1} since anchor.</p>
+            </div>
+          </CardContent>
+        </Card>
+
         <Card className="border-border/50">
           <CardHeader className="flex flex-row items-center gap-3 pb-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
@@ -213,6 +301,17 @@ const Settings = () => {
             <Button onClick={handleExportData} variant="outline" className="w-full gap-2">
               <Download className="size-4" /> Export All Data (JSON)
             </Button>
+            <Button onClick={handleImportClick} disabled={importing} variant="outline" className="w-full gap-2 border-primary/40 hover:bg-primary/5">
+              <Upload className="size-4" /> {importing ? 'Importing...' : 'Import Backup (JSON)'}
+            </Button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="application/json,.json"
+              onChange={handleImportData}
+              className="hidden"
+            />
+            <p className="text-2xs text-muted-foreground">Import overwrites matching records by ID. Always export a fresh backup first.</p>
             <Separator />
             <div className="space-y-2 text-sm">
               <div className="flex justify-between"><span className="text-muted-foreground">Database</span><Badge variant="default">Cloud</Badge></div>

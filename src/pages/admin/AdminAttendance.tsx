@@ -11,19 +11,27 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Label } from '@/components/ui/label';
 import { toast } from 'sonner';
 import { CalendarDays, Users, Clock, Search, Pencil, Trash2, Download, Filter, RefreshCw, Printer } from 'lucide-react';
+import { useSystemSettings } from '@/hooks/useSystemSettings';
 
 const AdminAttendance = () => {
   const { user } = useAuth();
+  const { currentPeriod } = useSystemSettings();
   const [records, setRecords] = useState<any[]>([]);
   const [employees, setEmployees] = useState<any[]>([]);
-  const [dateFrom, setDateFrom] = useState(new Date().toISOString().split('T')[0]);
-  const [dateTo, setDateTo] = useState(new Date().toISOString().split('T')[0]);
+  const [dateFrom, setDateFrom] = useState(currentPeriod.startISO);
+  const [dateTo, setDateTo] = useState(currentPeriod.endISO);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [selectedEmployee, setSelectedEmployee] = useState<string>('all');
   const [editRecord, setEditRecord] = useState<any>(null);
   const [editCheckIn, setEditCheckIn] = useState('');
   const [editCheckOut, setEditCheckOut] = useState('');
+
+  // Sync dates with current biweekly period when anchor changes
+  useEffect(() => {
+    setDateFrom(currentPeriod.startISO);
+    setDateTo(currentPeriod.endISO);
+  }, [currentPeriod.startISO, currentPeriod.endISO]);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -120,8 +128,8 @@ const AdminAttendance = () => {
   const printEmployeeAttendance = (rec: any) => {
     const name = getName(rec.user_id);
     const email = getEmail(rec.user_id);
-    const checkIn = rec.check_in ? new Date(rec.check_in).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—';
-    const checkOut = rec.check_out ? new Date(rec.check_out).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—';
+    const checkIn = rec.check_in ? new Date(rec.check_in).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '-';
+    const checkOut = rec.check_out ? new Date(rec.check_out).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '-';
     const hoursWorked = (Number(rec.total_worked_minutes || 0) / 60).toFixed(2);
     const breaks = Array.isArray(rec.pauses) ? rec.pauses.length : 0;
     const status = rec.status === 'checked_in' ? 'Working' : rec.status === 'paused' ? 'Paused' : 'Completed';
@@ -131,7 +139,7 @@ const AdminAttendance = () => {
       ? rec.pauses.map((p: any, i: number) => {
           const s = new Date(p.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
           const e = p.end ? new Date(p.end).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Ongoing';
-          const dur = p.end ? Math.round((new Date(p.end).getTime() - new Date(p.start).getTime()) / 60000) : '—';
+          const dur = p.end ? Math.round((new Date(p.end).getTime() - new Date(p.start).getTime()) / 60000) : '-';
           return `<tr><td style="padding:6px 12px;border:1px solid #e5e7eb;">${i + 1}</td><td style="padding:6px 12px;border:1px solid #e5e7eb;">${p.reason || 'Break'}</td><td style="padding:6px 12px;border:1px solid #e5e7eb;">${s}</td><td style="padding:6px 12px;border:1px solid #e5e7eb;">${e}</td><td style="padding:6px 12px;border:1px solid #e5e7eb;">${dur}${typeof dur === 'number' ? ' min' : ''}</td></tr>`;
         }).join('')
       : '';
@@ -190,109 +198,169 @@ const AdminAttendance = () => {
     }
   };
 
-  const downloadCSV = () => {
-    const rows = [['Employee', 'Email', 'Date', 'Check In', 'Check Out', 'Breaks', 'Hours Worked', 'Status']];
-    filtered.forEach(r => {
-      rows.push([
-        getName(r.user_id),
-        getEmail(r.user_id),
-        r.date,
-        r.check_in ? new Date(r.check_in).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '',
-        r.check_out ? new Date(r.check_out).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '',
-        String(Array.isArray(r.pauses) ? r.pauses.length : 0),
-        (Number(r.total_worked_minutes || 0) / 60).toFixed(2),
-        r.status === 'checked_in' ? 'Working' : r.status === 'paused' ? 'Paused' : 'Completed',
-      ]);
-    });
-    const csv = rows.map(r => r.map(c => `"${c}"`).join(',')).join('\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    const empName = selectedEmployee !== 'all' ? `_${getName(selectedEmployee).replace(/\s+/g, '_')}` : '_all';
-    a.download = `attendance${empName}_${dateFrom}_to_${dateTo}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-    toast.success('CSV downloaded');
+  const buildTablePdfHtml = (title: string, subtitle: string, recs: any[], includeEmployee: boolean, summary?: { label: string; value: string }[]) => {
+    const rows = recs.map(r => {
+      const hours = (Number(r.total_worked_minutes || 0) / 60).toFixed(2);
+      const ci = r.check_in ? new Date(r.check_in).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '-';
+      const co = r.check_out ? new Date(r.check_out).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '-';
+      const status = r.status === 'checked_in' ? 'Working' : r.status === 'paused' ? 'Paused' : 'Completed';
+      const breaks = Array.isArray(r.pauses) ? r.pauses.length : 0;
+      const dateStr = new Date(r.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+      return `<tr>
+        ${includeEmployee ? `<td><div style="font-weight:600">${getName(r.user_id)}</div><div style="font-size:10px;color:#64748b">${getEmail(r.user_id)}</div></td>` : ''}
+        <td>${dateStr}</td>
+        <td>${ci}</td>
+        <td>${co}</td>
+        <td style="text-align:center">${breaks}</td>
+        <td style="text-align:right;font-weight:600">${hours}h</td>
+        <td><span class="badge ${status.toLowerCase()}">${status}</span></td>
+      </tr>`;
+    }).join('');
+
+    const summaryHtml = summary ? `<div class="stats">${summary.map(s => `<div class="stat"><div class="stat-label">${s.label}</div><div class="stat-value">${s.value}</div></div>`).join('')}</div>` : '';
+
+    return `<!DOCTYPE html><html><head><meta charset="utf-8"/><title>${title}</title>
+<style>
+  *{box-sizing:border-box}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Inter,sans-serif;color:#0f172a;margin:0;padding:40px;background:#fff}
+  .header{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #0d9488;padding-bottom:20px;margin-bottom:24px}
+  .brand{font-size:22px;font-weight:800;color:#0d9488;letter-spacing:-0.02em}
+  .brand-sub{font-size:11px;color:#64748b;margin-top:4px;text-transform:uppercase;letter-spacing:0.08em}
+  .meta{text-align:right;font-size:11px;color:#64748b}
+  h1{font-size:22px;margin:0 0 4px}
+  .subtitle{color:#64748b;font-size:12px;margin-bottom:20px}
+  .stats{display:grid;grid-template-columns:repeat(${summary?.length || 4},1fr);gap:10px;margin-bottom:20px}
+  .stat{border:1px solid #e2e8f0;border-radius:8px;padding:12px;background:#f8fafc}
+  .stat-label{font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:#64748b;margin-bottom:4px}
+  .stat-value{font-size:18px;font-weight:700;color:#0f172a}
+  table{width:100%;border-collapse:collapse;font-size:11px}
+  thead th{background:#0f172a;color:#fff;text-align:left;padding:9px 10px;font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:0.05em}
+  tbody td{padding:8px 10px;border-bottom:1px solid #e2e8f0}
+  tbody tr:nth-child(even){background:#f8fafc}
+  .badge{display:inline-block;padding:2px 9px;border-radius:999px;font-size:10px;font-weight:600}
+  .badge.completed{background:#dcfce7;color:#166534}
+  .badge.working{background:#dbeafe;color:#1e40af}
+  .badge.paused{background:#fee2e2;color:#991b1b}
+  .footer{margin-top:28px;padding-top:14px;border-top:1px solid #e2e8f0;font-size:10px;color:#94a3b8;display:flex;justify-content:space-between}
+  @media print{body{padding:20px} tr{page-break-inside:avoid}}
+</style></head><body>
+  <div class="header">
+    <div><div class="brand">My City Radius</div><div class="brand-sub">Time & Attendance</div></div>
+    <div class="meta"><strong style="color:#0f172a;font-size:13px;display:block;margin-bottom:2px">${title}</strong>Generated ${new Date().toLocaleString()}</div>
+  </div>
+  <h1>${title}</h1>
+  <div class="subtitle">${subtitle}</div>
+  ${summaryHtml}
+  <table>
+    <thead><tr>${includeEmployee ? '<th>Employee</th>' : ''}<th>Date</th><th>Check In</th><th>Check Out</th><th style="text-align:center">Breaks</th><th style="text-align:right">Hours</th><th>Status</th></tr></thead>
+    <tbody>${rows || `<tr><td colspan="${includeEmployee ? 7 : 6}" style="text-align:center;padding:24px;color:#94a3b8">No records</td></tr>`}</tbody>
+  </table>
+  <div class="footer"><span>My City Radius • Confidential</span><span>${recs.length} record${recs.length === 1 ? '' : 's'}</span></div>
+  <script>window.onload=()=>{window.print();setTimeout(()=>window.close(),500)}</script>
+</body></html>`;
+  };
+
+  const downloadPDF = () => {
+    if (filtered.length === 0) return;
+    const totalH = filtered.reduce((s, r) => s + Number(r.total_worked_minutes || 0), 0) / 60;
+    const completed = filtered.filter(r => r.status === 'checked_out').length;
+    const working = filtered.filter(r => r.status === 'checked_in').length;
+    const empLabel = selectedEmployee !== 'all' ? getName(selectedEmployee) : 'All Employees';
+    const html = buildTablePdfHtml(
+      'Attendance Report',
+      `${empLabel} • ${dateFrom} to ${dateTo}`,
+      filtered,
+      selectedEmployee === 'all',
+      [
+        { label: 'Records', value: String(filtered.length) },
+        { label: 'Completed', value: String(completed) },
+        { label: 'Working', value: String(working) },
+        { label: 'Total Hours', value: `${totalH.toFixed(1)}h` },
+      ],
+    );
+    const w = window.open('', '_blank', 'width=900,height=700');
+    if (!w) return;
+    w.document.write(html); w.document.close();
+    toast.success('PDF generated');
   };
 
   const downloadAllBiweeklySheets = async () => {
-    toast.loading('Generating biweekly sheets...', { id: 'biweekly' });
-
-    const now = new Date();
-    const year = now.getFullYear();
-    const startOfYear = new Date(year, 0, 1);
-    while (startOfYear.getDay() !== 1) startOfYear.setDate(startOfYear.getDate() + 1);
-    const daysSinceStart = Math.floor((now.getTime() - startOfYear.getTime()) / (1000 * 60 * 60 * 24));
-    const periodIndex = Math.floor(daysSinceStart / 14);
-    const periodStart = new Date(startOfYear);
-    periodStart.setDate(periodStart.getDate() + periodIndex * 14);
-    const periodEnd = new Date(periodStart);
-    periodEnd.setDate(periodEnd.getDate() + 13);
-
-    const pStart = periodStart.toISOString().split('T')[0];
-    const pEnd = periodEnd.toISOString().split('T')[0];
+    toast.loading('Generating per-employee PDFs...', { id: 'biweekly' });
 
     const { data: allRecords } = await supabase.from('attendance_records').select('*')
-      .gte('date', pStart).lte('date', pEnd).order('date', { ascending: true });
+      .gte('date', dateFrom).lte('date', dateTo).order('date', { ascending: true });
 
     if (!allRecords || allRecords.length === 0) {
       toast.dismiss('biweekly');
-      toast.info('No records for current biweekly period');
+      toast.info('No records in selected date range');
       return;
     }
 
-    const rows = [['Employee', 'Email', 'Date', 'Check In', 'Check Out', 'Breaks', 'Hours Worked', 'Status']];
-    allRecords.forEach(r => {
-      rows.push([
-        getName(r.user_id),
-        getEmail(r.user_id),
-        r.date,
-        r.check_in ? new Date(r.check_in).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '',
-        r.check_out ? new Date(r.check_out).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '',
-        String(Array.isArray(r.pauses) ? r.pauses.length : 0),
-        (Number(r.total_worked_minutes || 0) / 60).toFixed(2),
-        r.status === 'checked_in' ? 'Working' : r.status === 'paused' ? 'Paused' : 'Completed',
-      ]);
-    });
+    // Group records by employee
+    const grouped: Record<string, any[]> = {};
+    for (const r of allRecords) {
+      if (!grouped[r.user_id]) grouped[r.user_id] = [];
+      grouped[r.user_id].push(r);
+    }
 
-    rows.push([]);
-    rows.push(['--- SUMMARY ---', '', '', '', '', '', '', '']);
-    const grouped = allRecords.reduce((acc: any, r) => {
-      if (!acc[r.user_id]) acc[r.user_id] = { totalMinutes: 0, days: 0 };
-      acc[r.user_id].totalMinutes += Number(r.total_worked_minutes || 0);
-      acc[r.user_id].days += 1;
-      return acc;
-    }, {});
-    Object.entries(grouped).forEach(([uid, data]: [string, any]) => {
-      rows.push([getName(uid), getEmail(uid), '', '', '', '', (data.totalMinutes / 60).toFixed(2), `${data.days} days`]);
-    });
+    const employeeIds = Object.keys(grouped);
+    let opened = 0;
+    let blocked = 0;
 
-    const csv = rows.map(r => r.map(c => `"${c}"`).join(',')).join('\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `biweekly_attendance_${pStart}_to_${pEnd}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+    // Open a separate PDF window for each employee (sequentially with small delay to avoid popup blocker)
+    for (const uid of employeeIds) {
+      const empRecords = grouped[uid];
+      const empName = getName(uid);
+      const totalMin = empRecords.reduce((s, r) => s + Number(r.total_worked_minutes || 0), 0);
+      const totalH = totalMin / 60;
+      const completed = empRecords.filter(r => r.status === 'checked_out').length;
+      const breaks = empRecords.reduce((s, r) => s + (Array.isArray(r.pauses) ? r.pauses.length : 0), 0);
+
+      const html = buildTablePdfHtml(
+        `Attendance - ${empName}`,
+        `${empName} • ${dateFrom} to ${dateTo}`,
+        empRecords,
+        false,
+        [
+          { label: 'Records', value: String(empRecords.length) },
+          { label: 'Days Worked', value: String(completed) },
+          { label: 'Total Hours', value: `${totalH.toFixed(1)}h` },
+          { label: 'Total Breaks', value: String(breaks) },
+        ],
+      );
+
+      const w = window.open('', '_blank', 'width=900,height=700');
+      if (!w) { blocked++; continue; }
+      w.document.write(html); w.document.close();
+      opened++;
+      // Small delay so browsers don't block subsequent popups
+      await new Promise(res => setTimeout(res, 350));
+    }
+
     toast.dismiss('biweekly');
-    toast.success('Biweekly sheet downloaded');
+    if (blocked > 0) {
+      toast.warning(`Generated ${opened} PDFs. ${blocked} were blocked - please allow popups for this site.`);
+    } else {
+      toast.success(`Generated ${opened} PDF${opened === 1 ? '' : 's'} (one per employee)`);
+    }
   };
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <h2 className="text-2xl font-bold text-foreground">All Attendance</h2>
+      <div className="rounded-xl border border-border/50 bg-gradient-soft p-4 sm:p-5 shadow-sm flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h2 className="text-xl sm:text-2xl font-bold text-foreground">All Attendance</h2>
+          <p className="text-xs text-muted-foreground mt-0.5">Default range follows the current biweekly period</p>
+        </div>
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" size="sm" className="gap-1.5 text-xs" onClick={() => fetchData()}>
             <RefreshCw className="size-3.5" /> Refresh
           </Button>
-          <Button variant="outline" size="sm" className="gap-1.5 text-xs" onClick={downloadCSV} disabled={filtered.length === 0}>
-            <Download className="size-3.5" /> Download CSV
+          <Button variant="outline" size="sm" className="gap-1.5 text-xs" onClick={downloadPDF} disabled={filtered.length === 0}>
+            <Printer className="size-3.5" /> Download PDF
           </Button>
           <Button size="sm" className="gap-1.5 text-xs" onClick={downloadAllBiweeklySheets}>
-            <Download className="size-3.5" /> Biweekly All Workers
+            <Printer className="size-3.5" /> PDF per Employee
           </Button>
         </div>
       </div>
@@ -401,8 +469,8 @@ const AdminAttendance = () => {
                         </div>
                       </TableCell>
                       <TableCell className="text-sm">{new Date(r.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</TableCell>
-                      <TableCell>{r.check_in ? new Date(r.check_in).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}</TableCell>
-                      <TableCell>{r.check_out ? new Date(r.check_out).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}</TableCell>
+                      <TableCell>{r.check_in ? new Date(r.check_in).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '-'}</TableCell>
+                      <TableCell>{r.check_out ? new Date(r.check_out).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '-'}</TableCell>
                       <TableCell>{Array.isArray(r.pauses) ? r.pauses.length : 0}</TableCell>
                       <TableCell className="font-semibold">{(Number(r.total_worked_minutes || 0) / 60).toFixed(1)}h</TableCell>
                       <TableCell>
