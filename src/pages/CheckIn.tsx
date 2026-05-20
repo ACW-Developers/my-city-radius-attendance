@@ -20,7 +20,7 @@ import { getTodayDateStringAZ, getCurrentHourAZ, formatTimeAZ, formatDateAZ, toA
 import { QRScanner } from '@/components/QRScanner';
 import { useWebAuthn } from '@/hooks/useWebAuthn';
 import { verifyAttendanceLocation } from '@/lib/geofence';
-import { getAutoCheckoutHourForRoles, formatHour12 } from '@/lib/roleLabels';
+
 
 const BIWEEKLY_TARGET_HOURS = 80;
 const PAUSE_REASONS = ['Lunch Break', 'Appointment', 'Personal Break', 'Meeting', 'Other'];
