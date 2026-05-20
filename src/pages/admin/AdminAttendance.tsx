@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
 import { toast } from 'sonner';
-import { CalendarDays, Users, Clock, Search, Pencil, Trash2, Download, Filter, RefreshCw, Printer } from 'lucide-react';
+import { CalendarDays, Users, Clock, Search, Pencil, Trash2, Download, Filter, RefreshCw, Printer, PlayCircle } from 'lucide-react';
 import { useSystemSettings } from '@/hooks/useSystemSettings';
 import { formatTimeAZ, formatTimeAZ24, formatDateAZ, formatDateShortAZ, formatDateTimeFullAZ } from '@/lib/timezone';
 
@@ -115,6 +115,18 @@ const AdminAttendance = () => {
     const { error } = await supabase.from('attendance_records').delete().eq('id', rec.id);
     if (error) toast.error('Error deleting');
     else { toast.success('Record deleted'); await logActivity('delete_attendance', `Deleted attendance for ${getName(rec.user_id)}`); fetchData(); }
+  };
+
+  const markStillWorking = async (rec: any) => {
+    if (!confirm(`Mark ${getName(rec.user_id)} as still working? This will clear the check-out time.`)) return;
+    const { error } = await supabase
+      .from('attendance_records')
+      .update({ check_out: null, status: 'checked_in', total_worked_minutes: 0 })
+      .eq('id', rec.id);
+    if (error) { toast.error('Error updating record'); return; }
+    toast.success('Marked as still working');
+    await logActivity('reopen_attendance', `Reopened shift for ${getName(rec.user_id)} on ${rec.date}`);
+    fetchData();
   };
 
   const filtered = records.filter(r => {
@@ -484,8 +496,19 @@ const AdminAttendance = () => {
                           <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => printEmployeeAttendance(r)} title="Print PDF">
                             <Printer className="size-4" />
                           </Button>
-                          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleEdit(r)}><Pencil className="size-4" /></Button>
-                          <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive" onClick={() => deleteRecord(r)}><Trash2 className="size-4" /></Button>
+                          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleEdit(r)} title="Edit times"><Pencil className="size-4" /></Button>
+                          {r.check_out && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8 text-primary hover:text-primary"
+                              onClick={() => markStillWorking(r)}
+                              title="Mark as still working (clear check-out)"
+                            >
+                              <PlayCircle className="size-4" />
+                            </Button>
+                          )}
+                          <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive" onClick={() => deleteRecord(r)} title="Delete"><Trash2 className="size-4" /></Button>
                         </div>
                       </TableCell>
                     </TableRow>
