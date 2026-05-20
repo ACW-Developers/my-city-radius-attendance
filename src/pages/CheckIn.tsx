@@ -27,14 +27,13 @@ const PAUSE_REASONS = ['Lunch Break', 'Appointment', 'Personal Break', 'Meeting'
 
 const CheckIn = () => {
   const { user, profile, isAdmin, roles } = useAuth();
-  const autoOutHour = getAutoCheckoutHourForRoles(roles as string[]);
-  const autoOutLabel = formatHour12(autoOutHour);
   const [record, setRecord] = useState<any>(null);
   const [elapsed, setElapsed] = useState(0);
   const [periodHours, setPeriodHours] = useState(0);
   const [loading, setLoading] = useState(true);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const { authenticate, loading: bioLoading } = useWebAuthn();
+
 
   // Pause reason dialog
   const [pauseOpen, setPauseOpen] = useState(false);
