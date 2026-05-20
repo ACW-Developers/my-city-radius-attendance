@@ -172,8 +172,6 @@ const Dashboard = () => {
 
   const radialData = [{ name: 'Today', value: dailyProgress, fill: 'hsl(var(--primary))' }];
 
-  const autoOutHour = getAutoCheckoutHourForRoles(roles as string[]);
-  const autoOutLabel = formatHour12(autoOutHour);
 
   const handleHardRefresh = async () => {
     try {
