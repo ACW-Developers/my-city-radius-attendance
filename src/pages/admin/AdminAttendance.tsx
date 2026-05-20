@@ -496,8 +496,19 @@ const AdminAttendance = () => {
                           <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => printEmployeeAttendance(r)} title="Print PDF">
                             <Printer className="size-4" />
                           </Button>
-                          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleEdit(r)}><Pencil className="size-4" /></Button>
-                          <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive" onClick={() => deleteRecord(r)}><Trash2 className="size-4" /></Button>
+                          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleEdit(r)} title="Edit times"><Pencil className="size-4" /></Button>
+                          {r.check_out && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8 text-primary hover:text-primary"
+                              onClick={() => markStillWorking(r)}
+                              title="Mark as still working (clear check-out)"
+                            >
+                              <PlayCircle className="size-4" />
+                            </Button>
+                          )}
+                          <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive" onClick={() => deleteRecord(r)} title="Delete"><Trash2 className="size-4" /></Button>
                         </div>
                       </TableCell>
                     </TableRow>
