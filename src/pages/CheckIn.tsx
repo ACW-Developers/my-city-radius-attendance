@@ -114,28 +114,8 @@ const CheckIn = () => {
     }
   }, [record]);
 
-  useEffect(() => {
-    if (!record || record.status === 'checked_out') return;
-    const check = () => { if (getCurrentHourAZ() >= autoOutHour) autoCheckOut(); };
-    const interval = setInterval(check, 60000);
-    check();
-    return () => clearInterval(interval);
-  }, [record, autoOutHour]);
 
-  const autoCheckOut = async () => {
-    if (!record || record.status === 'checked_out') return;
-    const pauses = Array.isArray(record.pauses) ? [...record.pauses] : [];
-    if (pauses.length > 0 && !pauses[pauses.length - 1].end) {
-      pauses[pauses.length - 1].end = new Date().toISOString();
-    }
-    const workedMinutes = calculateWorked({ ...record, pauses, check_out: new Date().toISOString(), status: 'checked_out' }) / 60;
-    await supabase.from('attendance_records')
-      .update({ check_out: new Date().toISOString(), status: 'checked_out', pauses, total_worked_minutes: workedMinutes })
-      .eq('id', record.id);
-    if (user) await supabase.from('activity_logs').insert({ user_id: user.id, action: 'auto_checkout', details: `Automatically checked out at ${autoOutLabel} Arizona time` });
-    toast.info(`Your timer was automatically stopped at ${autoOutLabel}`);
-    fetchToday();
-  };
+
 
   const formatTime = (seconds: number) => {
     const h = Math.floor(seconds / 3600);
