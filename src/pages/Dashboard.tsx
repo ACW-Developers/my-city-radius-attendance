@@ -6,7 +6,7 @@ import {
   Clock, CalendarDays, Banknote, TrendingUp, UserCheck, Coffee,
   Flame, Award, Activity, Sun, Moon as MoonIcon, ArrowRight, Sparkles, RefreshCw,
 } from 'lucide-react';
-import { getAutoCheckoutHourForRoles, formatHour12 } from '@/lib/roleLabels';
+
 import { toast } from 'sonner';
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
