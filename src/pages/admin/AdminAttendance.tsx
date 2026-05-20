@@ -117,6 +117,18 @@ const AdminAttendance = () => {
     else { toast.success('Record deleted'); await logActivity('delete_attendance', `Deleted attendance for ${getName(rec.user_id)}`); fetchData(); }
   };
 
+  const markStillWorking = async (rec: any) => {
+    if (!confirm(`Mark ${getName(rec.user_id)} as still working? This will clear the check-out time.`)) return;
+    const { error } = await supabase
+      .from('attendance_records')
+      .update({ check_out: null, status: 'checked_in', total_worked_minutes: 0 })
+      .eq('id', rec.id);
+    if (error) { toast.error('Error updating record'); return; }
+    toast.success('Marked as still working');
+    await logActivity('reopen_attendance', `Reopened shift for ${getName(rec.user_id)} on ${rec.date}`);
+    fetchData();
+  };
+
   const filtered = records.filter(r => {
     if (!search) return true;
     return getName(r.user_id).toLowerCase().includes(search.toLowerCase());
