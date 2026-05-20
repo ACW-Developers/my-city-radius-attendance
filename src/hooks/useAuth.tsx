@@ -59,12 +59,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
       setSession(session);
       setUser(session?.user ?? null);
-
-      // Only (re)fetch profile/roles on real sign-in events, not on every token refresh
-      if (session?.user && (event === 'SIGNED_IN' || event === 'INITIAL_SESSION' || event === 'USER_UPDATED')) {
+      if (session?.user) {
         setTimeout(async () => {
           await Promise.all([
             fetchProfile(session.user.id),
@@ -72,12 +70,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           ]);
           setLoading(false);
         }, 0);
-      } else if (!session?.user) {
+      } else {
         setProfile(null);
         setRoles([]);
-        setLoading(false);
-      } else {
-        // TOKEN_REFRESHED — keep current profile/roles
         setLoading(false);
       }
     });
@@ -95,23 +90,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     });
 
-    // Refresh the session when tab becomes visible again so background-paused
-    // timers don't cause unexpected logouts.
-    const handleVisibility = () => {
-      if (document.visibilityState === 'visible') {
-        supabase.auth.getSession().then(({ data }) => {
-          if (data.session) supabase.auth.refreshSession().catch(() => {});
-        });
-      }
-    };
-    document.addEventListener('visibilitychange', handleVisibility);
-    window.addEventListener('focus', handleVisibility);
-
-    return () => {
-      subscription.unsubscribe();
-      document.removeEventListener('visibilitychange', handleVisibility);
-      window.removeEventListener('focus', handleVisibility);
-    };
+    return () => subscription.unsubscribe();
   }, []);
 
   const signUp = async (email: string, password: string, fullName: string) => {
